@@ -53,7 +53,7 @@ Contributions (code, discussions, or feature suggestions) that violate these pri
 ## 🛠️ Enforcement
 - Project maintainers will enforce this Code of Conduct **fairly and consistently**.  
 - If you witness or experience unacceptable behavior, report it to:  
-  **[insert contact email or method here]**.  
+  kisakibobo@gmail.com.  
 - Reports will be handled **confidentially, investigated promptly, and addressed with appropriate actions**, which may include:  
   - Warnings  
   - Removal of content  
