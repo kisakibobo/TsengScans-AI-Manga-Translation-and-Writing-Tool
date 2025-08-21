@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Manga Panel Translator</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef } = React;
+    function MangaTranslatorUI() {
+      // Global error handler
+      React.useEffect(() => {
+        const handleError = (error) => {
+          console.error('Global error caught:', error);
+          alert('An error occurred. Please refresh the page and try again.');
+        };
+        window.addEventListener('error', handleError);
+        window.addEventListener('unhandledrejection', handleError);
+        return () => {
+          window.removeEventListener('error', handleError);
+          window.removeEventListener('unhandledrejection', handleError);
+        };
+      }, []);
+      const [rawImage, setRawImage] = useState(null);
+      const [cleanImage, setCleanImage] = useState(null);
+      const [translations, setTranslations] = useState([]);
+      const [bubbleTranslations, setBubbleTranslations] = useState([]);
+      const [editedTranslations, setEditedTranslations] = useState([]);
+             const [placedText, setPlacedText] = useState([]);
+       const [placingIndex, setPlacingIndex] = useState(null);
+       const [loading, setLoading] = useState(false);
+       const [cropLoading, setCropLoading] = useState(false);
+       const [error, setError] = useState(null);
+       const [isCropMode, setIsCropMode] = useState(false);
+       const [rawDrawStart, setRawDrawStart] = useState(null);
+       const [rawDrawEnd, setRawDrawEnd] = useState(null);
+       const [isDrawing, setIsDrawing] = useState(false);
+       const [drawStart, setDrawStart] = useState(null);
+       const [drawEnd, setDrawEnd] = useState(null);
+       const [imageDimensions, setImageDimensions] = useState(null);
+       const [customTexts, setCustomTexts] = useState([]);
+       const [cleanOriginalDimensions, setCleanOriginalDimensions] = useState(null);
+       const canvasRef = useRef(null);
+      const handleRawUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file || !file.type.startsWith('image/')) return;
+        const url = URL.createObjectURL(file);
+        setRawImage(url);
+       
+        // Get image dimensions
+        const img = new Image();
+        img.onload = () => {
+          setImageDimensions({ width: img.width, height: img.height });
+        };
+        img.src = url;
+       
+        setLoading(true);
+        setError(null);
+        const formData = new FormData();
+        formData.append('image', file);
+        try {
+          const res = await fetch('http://localhost:5000/api/translate', {
+            method: 'POST',
+            body: formData,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Translation failed');
+          setTranslations(data);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      const handleCleanUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file || !file.type.startsWith('image/')) return;
+        const url = URL.createObjectURL(file);
+        setCleanImage(url);
+        setPlacedText([]);
+       
+        // Get original image dimensions for download scaling
+        const img = new Image();
+        img.onload = () => {
+          setCleanOriginalDimensions({ width: img.width, height: img.height });
+        };
+        img.src = url;
+      };
+      const handleRawMouseDown = (e) => {
+        if (!isCropMode || !rawImage) return;
+        try {
+          const rect = e.target.getBoundingClientRect();
+          const coords = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          console.log('Mouse down at:', coords);
+          setRawDrawStart(coords);
+          setRawDrawEnd(coords);
+        } catch (error) {
+          console.error("Error in handleRawMouseDown:", error);
+        }
+      };
+      const handleRawMouseMove = (e) => {
+        if (!isCropMode || !rawDrawStart) return;
+        try {
+          const rect = e.target.getBoundingClientRect();
+          const coords = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          console.log('Mouse move to:', coords);
+          setRawDrawEnd(coords);
+        } catch (error) {
+          console.error("Error in handleRawMouseMove:", error);
+        }
+      };
+      const handleRawMouseUp = async (e) => {
+        if (!isCropMode || !rawDrawStart || !rawImage) {
+          console.log('Early return - missing data:', { isCropMode, rawDrawStart, rawImage });
+          return;
+        }
+       
+        let rect = null;
+        try {
+          console.log('Starting crop process...');
+          rect = e.target.getBoundingClientRect();
+          console.log('Got bounding rect:', rect);
+         
+          // Get the final mouse position for the end point
+          const finalX = e.clientX - rect.left;
+          const finalY = e.clientY - rect.top;
+         
+          // Update the end point with the final position
+          const updatedRawDrawEnd = { x: finalX, y: finalY };
+          console.log('Final mouse position:', updatedRawDrawEnd);
+         
+          const canvas = document.createElement("canvas");
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.src = rawImage;
+          console.log('Starting image load for:', rawImage);
+          img.onload = async () => {
+            console.log('Image loaded successfully, dimensions:', { width: img.width, height: img.height });
+           
+            try {
+              console.log('Image loaded, dimensions:', { width: img.width, height: img.height });
+             
+              // Debug: Show the raw coordinates
+              console.log('Raw coordinates - Start:', rawDrawStart, 'End:', updatedRawDrawEnd);
+             
+              // Calculate the selection coordinates properly
+              const x1 = Math.min(rawDrawStart.x, updatedRawDrawEnd.x);
+              const y1 = Math.min(rawDrawStart.y, updatedRawDrawEnd.y);
+              const width = Math.abs(updatedRawDrawEnd.x - rawDrawStart.x);
+              const height = Math.abs(updatedRawDrawEnd.y - rawDrawStart.y);
+              console.log('Selection coordinates:', { x1, y1, width, height });
+             
+              // Check if we have a valid selection (minimum size)
+              if (width < 5 || height < 5) {
+                console.log('Selection too small, aborting');
+                alert('Selection too small. Please drag to create a larger selection area.');
+                setIsCropMode(false);
+                setRawDrawStart(null);
+                setRawDrawEnd(null);
+                return;
+              }
+             
+              // Show the user what area will be cropped (but don't require confirmation)
+              console.log(`Cropping area: ${width}×${height}px at position (${x1}, ${y1})`);
+             
+              // Calculate scaling and offsets to mimic object-contain
+              const originalWidth = img.width;
+              const originalHeight = img.height;
+              const scale = Math.min(rect.width / originalWidth, rect.height / originalHeight);
+              const drawWidth = originalWidth * scale;
+              const drawHeight = originalHeight * scale;
+              const offsetX = (rect.width - drawWidth) / 2;
+              const offsetY = (rect.height - drawHeight) / 2;
+              console.log('Object-contain params:', { scale, drawWidth, drawHeight, offsetX, offsetY });
+              // Crop EXACTLY what's displayed on screen (no coordinate conversion)
+              const displayX = x1;
+              const displayY = y1;
+              const displayWidth = width;
+              const displayHeight = height;
+             
+              console.log('Display coordinates (exact):', { displayX, displayY, displayWidth, displayHeight });
+             
+              // Crop EXACTLY what's in the red dashed rectangle (no padding)
+              const cropX = displayX;
+              const cropY = displayY;
+              const cropWidth = displayWidth;
+              const cropHeight = displayHeight;
+              console.log('Crop coordinates:', { cropX, cropY, cropWidth, cropHeight });
+              // Map display coordinates back to original image coordinates for higher quality
+              const originalCropX = Math.max(0, Math.min(originalWidth - 1, Math.round((cropX - offsetX) / scale)));
+              const originalCropY = Math.max(0, Math.min(originalHeight - 1, Math.round((cropY - offsetY) / scale)));
+              const originalCropWidth = Math.max(1, Math.min(originalWidth - originalCropX, Math.round(cropWidth / scale)));
+              const originalCropHeight = Math.max(1, Math.min(originalHeight - originalCropY, Math.round(cropHeight / scale)));
+              console.log('Original crop coordinates:', { originalCropX, originalCropY, originalCropWidth, originalCropHeight });
+              // Validate crop coordinates
+              if (originalCropWidth <= 0 || originalCropHeight <= 0) {
+                console.error('Invalid crop dimensions:', { originalCropWidth, originalCropHeight });
+                alert('Invalid crop area. Please try selecting a different area.');
+                setIsCropMode(false);
+                setRawDrawStart(null);
+                setRawDrawEnd(null);
+                return;
+              }
+              // Debug logging
+              console.log('Cropping Debug Info:', {
+                displaySelection: { x1, y1, width, height },
+                displayContainer: { width: rect.width, height: rect.height },
+                cropArea: { x: cropX, y: cropY, width: cropWidth, height: cropHeight }
+              });
+              // Enhanced image processing for better text recognition
+              const enlargementFactor = 2; // Reduced from 4x to 2x for better balance
+              canvas.width = originalCropWidth * enlargementFactor;
+              canvas.height = originalCropHeight * enlargementFactor;
+             
+              const ctx = canvas.getContext("2d");
+             
+              // Enable high-quality image smoothing
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+             
+              // Step 1: Crop directly from original image at full resolution
+              ctx.drawImage(img, originalCropX, originalCropY, originalCropWidth, originalCropHeight, 0, 0, originalCropWidth * enlargementFactor, originalCropHeight * enlargementFactor);
+             
+              // Step 2: Apply image enhancement techniques
+              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const data = imageData.data;
+             
+              // Apply contrast enhancement and noise reduction
+              for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+               
+                // Convert to grayscale for text processing
+                const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+               
+                // Apply contrast enhancement (more nuanced approach)
+                const contrastFactor = 1.5;
+                const enhanced = Math.max(0, Math.min(255, (gray - 128) * contrastFactor + 128));
+               
+                // No hard threshold - keep grayscale for GPT to handle nuances
+                const final = enhanced;
+               
+                // Set all channels to the same value for grayscale
+                data[i] = final; // Red
+                data[i + 1] = final; // Green
+                data[i + 2] = final; // Blue
+                // Alpha remains unchanged
+              }
+             
+              // Step 3: Apply sharpening filter
+              const sharpenedData = new Uint8ClampedArray(data);
+              const canvasWidth = canvas.width;
+              const canvasHeight = canvas.height;
+             
+              // Milder sharpening kernel for better results
+              const kernel = [
+                [0, -0.5, 0],
+                [-0.5, 3, -0.5],
+                [0, -0.5, 0]
+              ];
+             
+              for (let y = 1; y < canvasHeight - 1; y++) {
+                for (let x = 1; x < canvasWidth - 1; x++) {
+                  const idx = (y * canvasWidth + x) * 4;
+                  let sum = 0;
+                 
+                  for (let ky = 0; ky < 3; ky++) {
+                    for (let kx = 0; kx < 3; kx++) {
+                      const pixelIdx = ((y + ky - 1) * canvasWidth + (x + kx - 1)) * 4;
+                      sum += data[pixelIdx] * kernel[ky][kx];
+                    }
+                  }
+                 
+                  const sharpened = Math.max(0, Math.min(255, sum));
+                  sharpenedData[idx] = sharpened;
+                  sharpenedData[idx + 1] = sharpened;
+                  sharpenedData[idx + 2] = sharpened;
+                }
+              }
+             
+              // Step 4: Apply the enhanced image data back to canvas
+              const enhancedImageData = new ImageData(sharpenedData, canvasWidth, canvasHeight);
+              ctx.putImageData(enhancedImageData, 0, 0);
+             
+              console.log('Canvas created successfully with enhanced 2x enlargement and image processing');
+              // Convert to high quality PNG
+              const croppedDataUrl = canvas.toDataURL("image/png", 1.0);
+              console.log('Image converted to data URL, length:', croppedDataUrl.length);
+              // Save cropped image for debugging
+              // const link = document.createElement('a');
+              // const timestamp = Date.now();
+              // const filename = `crop_${timestamp}.png`;
+              // link.download = filename;
+              // link.href = croppedDataUrl;
+              // link.click();
+              // console.log('Image downloaded:', filename);
+              // Show loading state for this specific crop
+              setCropLoading(true);
+              // Add a simple test to show the user what was cropped
+              //alert(`Crop completed!\n\nDisplay area: ${cropWidth}×${cropHeight}px\nOriginal crop: ${originalCropWidth}×${originalCropHeight}px\nEnhanced and enlarged to: ${cropWidth * enlargementFactor}×${cropHeight * enlargementFactor}px\n\nDownloaded: ${filename}\nCheck your Downloads folder for the enhanced cropped image.`);
+              try {
+                console.log('Sending to API...');
+                const res = await fetch("http://localhost:5000/api/translate-crop", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ image: croppedDataUrl })
+                });
+                console.log('API response received:', res.status);
+                const data = await res.json();
+                console.log('API data:', data);
+               
+                if (res.ok) {
+                  setBubbleTranslations((prev) => [...prev, ...data]);
+                  console.log('Crop successful:', data);
+                } else {
+                  console.error("Crop translation failed:", data.error);
+                  // Show more specific error message
+                  if (data.error.includes('No text detected')) {
+                    alert(`No text detected in the selected area. Try selecting a larger area or a different speech bubble.`);
+                  } else if (data.error.includes('GPT refused')) {
+                    alert(`GPT refused to process this area. Try selecting a different speech bubble.`);
+                  } else {
+                    alert(`Crop translation failed: ${data.error}`);
+                  }
+                }
+              } catch (error) {
+                console.error("Error during crop translation:", error);
+                alert("Error during crop translation. Please try again.");
+              } finally {
+                setCropLoading(false);
+              }
+              setIsCropMode(false);
+              setRawDrawStart(null);
+              setRawDrawEnd(null);
+            } catch (error) {
+              console.error("Error in image processing:", error);
+              console.error("Error details:", {
+                message: error.message,
+                stack: error.stack,
+                rawDrawStart,
+                updatedRawDrawEnd,
+                rect: rect ? { width: rect.width, height: rect.height } : null
+              });
+              alert(`Error processing the image: ${error.message}. Please try again.`);
+              setIsCropMode(false);
+              setRawDrawStart(null);
+              setRawDrawEnd(null);
+              setCropLoading(false);
+            }
+          };
+          img.onerror = () => {
+            console.error("Failed to load image for cropping");
+            alert("Failed to load image for cropping. Please try again.");
+            setIsCropMode(false);
+            setRawDrawStart(null);
+            setRawDrawEnd(null);
+            setCropLoading(false);
+          };
+        } catch (error) {
+          console.error("Error in handleRawMouseUp:", error);
+          alert("Error during cropping. Please try again.");
+          setIsCropMode(false);
+          setRawDrawStart(null);
+          setRawDrawEnd(null);
+          setCropLoading(false);
+        }
+      };
+      const clearBubbleTranslations = () => {
+        setBubbleTranslations([]);
+      };
+      const addToEditor = (jp, en) => {
+        console.log('Adding to editor:', { jp, en });
+        setEditedTranslations((prev) => {
+          const newTranslations = [...prev, {
+            jp,
+            en,
+            fontSize: 12,
+            color: "#000000",
+            fontFamily: "Arial"
+          }];
+          console.log('Updated editedTranslations:', newTranslations);
+          return newTranslations;
+        });
+      };
+      const updateEditedTranslation = (index, value) => {
+        const updated = [...editedTranslations];
+        updated[index].en = value;
+        setEditedTranslations(updated);
+       
+        setPlacedText(prev => prev.map(item =>
+          item.index === index ? { ...item, en: value } : item
+        ));
+      };
+      const toggleFontColor = (index) => {
+        const updated = [...editedTranslations];
+        updated[index].color = updated[index].color === "#000000" ? "#ffffff" : "#000000";
+        setEditedTranslations(updated);
+       
+        setPlacedText(prev => prev.map(item =>
+          item.index === index ? { ...item, color: updated[index].color } : item
+        ));
+      };
+      const updateFontSize = (index, value) => {
+        const updated = [...editedTranslations];
+        updated[index].fontSize = parseInt(value);
+        setEditedTranslations(updated);
+       
+        setPlacedText(prev => prev.map(item =>
+          item.index === index ? { ...item, fontSize: parseInt(value) } : item
+        ));
+      };
+      const updateFontFamily = (index, value) => {
+        const updated = [...editedTranslations];
+        updated[index].fontFamily = value;
+        setEditedTranslations(updated);
+       
+        setPlacedText(prev => prev.map(item =>
+          item.index === index ? { ...item, fontFamily: value } : item
+        ));
+      };
+      const removeFromEditor = (index) => {
+        setEditedTranslations((prev) => prev.filter((_, i) => i !== index));
+        setPlacedText((prev) => prev.filter((item) => item.index !== index));
+        if (placingIndex === index) setPlacingIndex(null);
+      };
+      const calculateOptimalFontSize = (text, width, height) => {
+        const baseSize = 14;
+        const maxSize = 24;
+        const minSize = 6; // Reduced minimum size
+       
+        // Calculate based on text length and box size
+        const textLength = text.length;
+        const boxArea = width * height;
+       
+        let fontSize = baseSize;
+       
+        // Adjust based on text length
+        if (textLength > 50) fontSize = Math.max(minSize, fontSize - 6);
+        else if (textLength > 30) fontSize = Math.max(minSize, fontSize - 3);
+        else if (textLength < 10) fontSize = Math.min(maxSize, fontSize + 2);
+       
+        // Adjust based on box size
+        if (boxArea < 1000) fontSize = Math.max(minSize, fontSize - 3);
+        else if (boxArea > 5000) fontSize = Math.min(maxSize, fontSize + 2);
+       
+        // Additional adjustment for very long text
+        if (textLength > 80) fontSize = Math.max(minSize, fontSize - 2);
+       
+        // Ensure text fits within the box
+        const estimatedCharsPerLine = Math.floor(width / (fontSize * 0.6)); // Rough estimate
+        const estimatedLines = Math.ceil(textLength / estimatedCharsPerLine);
+        const estimatedHeight = estimatedLines * fontSize * 1.2; // Line height factor
+       
+        if (estimatedHeight > height) {
+          fontSize = Math.max(minSize, Math.floor(height / estimatedLines / 1.2));
+        }
+       
+        return fontSize;
+      };
+             const handleMouseDown = (e) => {
+         if (placingIndex === null) {
+           console.log('Mouse down - no placingIndex set');
+           return;
+         }
+         e.preventDefault();
+         const rect = e.target.getBoundingClientRect();
+         const x = e.clientX - rect.left;
+         const y = e.clientY - rect.top;
+         console.log('Mouse down - placingIndex:', placingIndex, 'coords:', { x, y });
+         const startCoords = { x, y };
+         setDrawStart(startCoords);
+         setDrawEnd(startCoords);
+         setIsDrawing(true);
+         console.log('Set draw start/end to:', startCoords);
+       };
+       const handleMouseMove = (e) => {
+         if (placingIndex === null || !isDrawing) {
+           console.log('Mouse move - placingIndex:', placingIndex, 'isDrawing:', isDrawing);
+           return;
+         }
+         e.preventDefault();
+         const rect = e.target.getBoundingClientRect();
+         const x = e.clientX - rect.left;
+         const y = e.clientY - rect.top;
+         setDrawEnd({ x, y });
+       };
+               const handleMouseUp = (e) => {
+         if (placingIndex === null || !isDrawing) {
+           console.log('Early return - placingIndex:', placingIndex, 'isDrawing:', isDrawing);
+           return;
+         }
+         if (!drawStart) {
+           console.error('drawStart is null, cannot calculate dimensions');
+           return;
+         }
+         e.preventDefault();
+         const rect = e.target.getBoundingClientRect();
+         const x = e.clientX - rect.left;
+         const y = e.clientY - rect.top;
+         setDrawEnd({ x, y });
+         const startX = Math.min(drawStart.x, x);
+         const startY = Math.min(drawStart.y, y);
+         const width = Math.abs(x - drawStart.x);
+         const height = Math.abs(y - drawStart.y);
+         console.log('Mouse up - placingIndex:', placingIndex, 'dimensions:', { width, height, startX, startY });
+         console.log('drawStart:', drawStart, 'current mouse position:', { x, y });
+         if (width > 20 && height > 10) {
+           // Handle custom text placement
+           if (typeof placingIndex === 'string' && placingIndex.startsWith('custom-')) {
+             const customId = parseInt(placingIndex.replace('custom-', ''));
+             console.log('Placing custom text with ID:', customId);
+             updateCustomText(customId, 'x', startX);
+             updateCustomText(customId, 'y', startY);
+             updateCustomText(customId, 'width', width);
+             updateCustomText(customId, 'height', height);
+             updateCustomText(customId, 'isPlaced', true);
+           } else {
+             // Handle regular translation placement
+             console.log('Attempting to place regular translation, placingIndex:', placingIndex);
+             console.log('editedTranslations array:', editedTranslations);
+             console.log('editedTranslations length:', editedTranslations.length);
+            
+             const current = editedTranslations[placingIndex];
+             console.log('Current translation object:', current);
+            
+             if (!current) {
+               console.error('Translation not found for index:', placingIndex);
+               console.error('Available indices:', editedTranslations.map((_, i) => i));
+               alert('Translation not found. Please try again.');
+               setPlacingIndex(null);
+               setIsDrawing(false);
+               setDrawStart(null);
+               setDrawEnd(null);
+               return;
+             }
+            
+             console.log('Placing regular translation:', current);
+             const optimalFontSize = calculateOptimalFontSize(current.en, width, height);
+             console.log('Calculated optimal font size:', optimalFontSize);
+            
+             // Remove any existing placement for this translation
+             setPlacedText(prev => {
+               const filtered = prev.filter(item => item.index !== placingIndex);
+               console.log('Removed existing placements, new placedText:', filtered);
+               return filtered;
+             });
+            
+             // Add new placement
+             setPlacedText(prev => {
+               const newPlacedText = [...prev, {
+                 ...current,
+                 x: startX,
+                 y: startY,
+                 width,
+                 height,
+                 fontSize: optimalFontSize,
+                 index: placingIndex
+               }];
+               console.log('Added new placement, updated placedText:', newPlacedText);
+               return newPlacedText;
+             });
+            
+             // Update the font size in editedTranslations
+             const updated = [...editedTranslations];
+             updated[placingIndex].fontSize = optimalFontSize;
+             setEditedTranslations(updated);
+           }
+         } else {
+           console.log('Selection too small:', { width, height });
+         }
+         setPlacingIndex(null);
+         setIsDrawing(false);
+         setDrawStart(null);
+         setDrawEnd(null);
+       };
+      const handleMouseLeave = () => {
+        if (placingIndex !== null) {
+          setPlacingIndex(null);
+          setIsDrawing(false);
+          setDrawStart(null);
+          setDrawEnd(null);
+        }
+      };
+      const removePlaced = (index) => {
+        setPlacedText((prev) => prev.filter((t) => t.index !== index));
+      };
+             const clearEditor = () => {
+         setEditedTranslations([]);
+         setPlacedText([]);
+         setPlacingIndex(null);
+       };
+       // Custom text management functions
+       const addCustomText = () => {
+         const newCustomText = {
+           id: Date.now(),
+           text: '',
+           fontSize: 14,
+           color: "#000000",
+           fontFamily: "Arial",
+           x: 0,
+           y: 0,
+           width: 100,
+           height: 50,
+           isPlaced: false
+         };
+         setCustomTexts(prev => [...prev, newCustomText]);
+       };
+       const updateCustomText = (id, field, value) => {
+         setCustomTexts(prev => prev.map(text =>
+           text.id === id ? { ...text, [field]: value } : text
+         ));
+       };
+       const removeCustomText = (id) => {
+         setCustomTexts(prev => prev.filter(text => text.id !== id));
+       };
+       const placeCustomText = (id) => {
+         console.log('Setting custom text placement for ID:', id);
+         setPlacingIndex(`custom-${id}`);
+       };
+       const removeCustomTextPlacement = (id) => {
+         updateCustomText(id, 'isPlaced', false);
+         updateCustomText(id, 'x', 0);
+         updateCustomText(id, 'y', 0);
+         updateCustomText(id, 'width', 100);
+         updateCustomText(id, 'height', 50);
+       };
+              // Download functionality
+       const downloadEditedPanel = () => {
+         if (!cleanImage || !cleanOriginalDimensions) {
+           alert('Please upload a clean panel first.');
+           return;
+         }
+         const canvas = document.createElement('canvas');
+         const ctx = canvas.getContext('2d');
+         const img = new Image();
+        
+         img.onload = () => {
+           // Use original dimensions for high quality
+           canvas.width = cleanOriginalDimensions.width;
+           canvas.height = cleanOriginalDimensions.height;
+          
+           // Draw the clean image at original resolution
+           ctx.drawImage(img, 0, 0, cleanOriginalDimensions.width, cleanOriginalDimensions.height);
+          
+           // Get the displayed image's bounding rect to calculate scaling
+           const displayedImg = document.querySelector('img[src="' + cleanImage + '"]');
+           if (!displayedImg) {
+             alert('Could not find displayed image for scaling calculation.');
+             return;
+           }
+          
+           const displayRect = displayedImg.getBoundingClientRect();
+          
+           // Calculate the uniform content display scale (for object-contain)
+           const contentScaleDisplay = Math.min(
+             displayRect.width / cleanOriginalDimensions.width,
+             displayRect.height / cleanOriginalDimensions.height
+           );
+           const scaleToOriginal = 1 / contentScaleDisplay;
+          
+           // Calculate displayed content dimensions and offsets
+           const contentDisplayWidth = cleanOriginalDimensions.width * contentScaleDisplay;
+           const contentDisplayHeight = cleanOriginalDimensions.height * contentScaleDisplay;
+           const contentOffsetX = (displayRect.width - contentDisplayWidth) / 2;
+           const contentOffsetY = (displayRect.height - contentDisplayHeight) / 2;
+          
+           // Helper function to draw scaled text
+           const drawScaledText = (textObj) => {
+             // Map display coordinates to original image coordinates
+             const originalX = (textObj.x - contentOffsetX) * scaleToOriginal;
+             const originalY = (textObj.y - contentOffsetY) * scaleToOriginal;
+             const originalWidth = textObj.width * scaleToOriginal;
+             const originalHeight = textObj.height * scaleToOriginal;
+             const originalFontSize = textObj.fontSize * scaleToOriginal;
+             const originalPadding = 2 * scaleToOriginal; // UI padding: 2px scaled
+             const maxTextWidth = originalWidth - 2 * originalPadding; // Left and right padding
+             const lineHeight = originalFontSize * 1.2; // Match UI line-height: 1.2
+            
+             ctx.font = `${originalFontSize}px ${textObj.fontFamily}`;
+             ctx.fillStyle = textObj.color;
+             ctx.textAlign = 'center';
+             ctx.textBaseline = 'middle';
+             ctx.imageSmoothingQuality = 'high';
+            
+             // Add text shadow for better visibility
+             if (textObj.color === "#ffffff") {
+               ctx.shadowColor = 'rgba(0,0,0,0.8)';
+               ctx.shadowBlur = 2 * scaleToOriginal;
+               ctx.shadowOffsetX = 1 * scaleToOriginal;
+               ctx.shadowOffsetY = 1 * scaleToOriginal;
+             } else {
+               ctx.shadowColor = 'rgba(255,255,255,0.8)';
+               ctx.shadowBlur = 2 * scaleToOriginal;
+               ctx.shadowOffsetX = 1 * scaleToOriginal;
+               ctx.shadowOffsetY = 1 * scaleToOriginal;
+             }
+            
+             // Calculate text position (center of the box)
+             const textX = originalX + originalWidth / 2;
+            
+             // Word wrap the text: First pass to collect lines
+             const words = textObj.text ? textObj.text.split(' ') : textObj.en.split(' ');
+             let lines = [];
+             let currentLine = '';
+            
+             words.forEach(word => {
+               const testLine = currentLine + word + ' ';
+               const metrics = ctx.measureText(testLine);
+              
+               if (metrics.width > maxTextWidth && currentLine !== '') {
+                 lines.push(currentLine.trim());
+                 currentLine = word + ' ';
+               } else if (metrics.width > maxTextWidth) {
+                 // Mimic word-break: break-word for long words
+                 let brokenWord = '';
+                 for (let char of word) {
+                   const testBroken = brokenWord + char;
+                   if (ctx.measureText(testBroken + ' ').width > maxTextWidth) {
+                     lines.push(brokenWord);
+                     brokenWord = char;
+                   } else {
+                     brokenWord = testBroken;
+                   }
+                 }
+                 currentLine = brokenWord + ' ';
+               } else {
+                 currentLine = testLine;
+               }
+             });
+             if (currentLine) lines.push(currentLine.trim());
+            
+             // Enforce height limits and clipping (mimic overflow: hidden)
+             const totalTextHeight = lines.length * lineHeight;
+             if (totalTextHeight > originalHeight) {
+               const maxLines = Math.floor(originalHeight / lineHeight);
+               lines = lines.slice(0, maxLines);
+             }
+            
+             // Calculate starting Y for true vertical centering
+             const startY = originalY + (originalHeight - (lines.length * lineHeight)) / 2 + (lineHeight / 2); // Adjust for middle baseline
+            
+             // Second pass: Draw the lines
+             lines.forEach((line, index) => {
+               ctx.fillText(line, textX, startY + (index * lineHeight));
+             });
+            
+             // Reset shadow
+             ctx.shadowColor = 'transparent';
+             ctx.shadowBlur = 0;
+             ctx.shadowOffsetX = 0;
+             ctx.shadowOffsetY = 0;
+           };
+          
+           // Draw placed translations
+           placedText.forEach(text => {
+             if (text.en && text.en.trim() !== '') {
+               drawScaledText(text);
+             }
+           });
+          
+           // Draw custom texts
+           customTexts.forEach(text => {
+             if (text.isPlaced && text.text.trim() !== '') {
+               drawScaledText(text);
+             }
+           });
+          
+           // Download the image
+           const link = document.createElement('a');
+           link.download = 'edited_manga_panel.png';
+           link.href = canvas.toDataURL();
+           link.click();
+         };
+        
+         img.src = cleanImage;
+       };
+      return (
+        <div className="flex h-full overflow-hidden">
+          {/* Left Panel: Raw Image Upload & Translations */}
+          <div className="w-1/2 p-4 flex flex-col overflow-hidden border-r">
+            {/* Fixed top section (header, input, image) */}
+            <div className="flex-shrink-0">
+              <h1 className="text-xl font-bold mb-4">Raw Manga Panel</h1>
+              <input type="file" accept="image/*" onChange={handleRawUpload} className="mb-4 p-2 border rounded" />
+             
+              {/* Crop button and Clear Crops button */}
+              <div className="flex space-x-2 mb-4">
+                <button onClick={() => setIsCropMode(!isCropMode)} className="px-3 py-1 bg-blue-600 text-white rounded text-sm">
+                  {isCropMode ? "❌ Cancel Crop" : "✂️ Crop Speech Bubbles"}
+                </button>
+                {isCropMode && (
+                  <div className="text-sm text-blue-600 mt-2">
+                    💡 Click and drag to select an area, then release to crop automatically
+                  </div>
+                )}
+                {bubbleTranslations.length > 0 && (
+                  <button onClick={clearBubbleTranslations} className="px-3 py-1 bg-red-600 text-white rounded text-sm">
+                    🗑️ Clear Crops
+                  </button>
+                )}
+                {isCropMode && (
+                  <div className="text-xs text-gray-600 mt-2">
+                    🔧 Enhanced processing: 2x enlargement + contrast + sharpening
+                  </div>
+                )}
+                {isCropMode && rawDrawStart && rawDrawEnd && imageDimensions && (
+                  <button
+                    onClick={() => {
+                      try {
+                        const imgElement = document.querySelector('img');
+                        if (!imgElement) {
+                          alert('Image element not found');
+                          return;
+                        }
+                        const rect = imgElement.getBoundingClientRect();
+                        const x = Math.min(rawDrawStart.x, rawDrawEnd.x);
+                        const y = Math.min(rawDrawStart.y, rawDrawEnd.y);
+                        const width = Math.abs(rawDrawStart.x - rawDrawEnd.x);
+                        const height = Math.abs(rawDrawStart.y - rawDrawEnd.y);
+                        const scaleX = imageDimensions.width / rect.width;
+                        const scaleY = imageDimensions.height / rect.height;
+                        const originalX = Math.floor(x * scaleX);
+                        const originalY = Math.floor(y * scaleY);
+                        const originalWidth = Math.floor(width * scaleX);
+                        const originalHeight = Math.floor(height * scaleY);
+                        alert(`Debug Info:\nDisplay: ${width}×${height}px\nOriginal: ${originalWidth}×${originalHeight}px\nScale: ${scaleX.toFixed(2)}×${scaleY.toFixed(2)}\nImage: ${imageDimensions.width}×${imageDimensions.height}px\nContainer: ${rect.width}×${rect.height}px`);
+                      } catch (error) {
+                        console.error('Debug button error:', error);
+                        alert('Error getting debug info. Check console for details.');
+                      }
+                    }}
+                    className="px-3 py-1 bg-green-600 text-white rounded text-sm"
+                  >
+                    🔍 Debug Coords
+                  </button>
+                )}
+              </div>
+             
+              {/* Raw image with drawing events */}
+              {rawImage && (
+                <div className="relative mb-4">
+                  <img
+                    src={rawImage}
+                    className={`w-full max-h-80 object-contain border rounded ${isCropMode ? 'cursor-crosshair select-none' : 'cursor-default'}`}
+                    style={isCropMode ? { userSelect: 'none', pointerEvents: 'auto' } : {}}
+                    onMouseDown={handleRawMouseDown}
+                    onMouseMove={handleRawMouseMove}
+                    onMouseUp={handleRawMouseUp}
+                    draggable={!isCropMode}
+                  />
+                  {/* Drawing rectangle for raw image - EXACTLY what will be cropped */}
+                  {isCropMode && rawDrawStart && rawDrawEnd && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: `${Math.min(rawDrawStart.x, rawDrawEnd.x)}px`,
+                        top: `${Math.min(rawDrawStart.y, rawDrawEnd.y)}px`,
+                        width: `${Math.abs(rawDrawStart.x - rawDrawEnd.x)}px`,
+                        height: `${Math.abs(rawDrawStart.y - rawDrawEnd.y)}px`,
+                        border: "2px dashed red",
+                        backgroundColor: "rgba(255, 0, 0, 0.1)",
+                        pointerEvents: "none"
+                      }}
+                    />
+                  )}
+                  {isCropMode && (
+                    <div className="absolute top-2 left-2 bg-yellow-500 text-black px-3 py-1 rounded text-sm font-bold">
+                      Click and drag to select speech bubble
+                    </div>
+                  )}
+                </div>
+              )}
+             
+              {/* Loading/error messages */}
+              {loading && <div className="p-3 bg-blue-100 text-blue-800 rounded mb-4">Processing full panel with GPT...</div>}
+              {cropLoading && <div className="p-3 bg-yellow-100 text-yellow-800 rounded mb-4">Processing cropped area...</div>}
+            </div>
+           
+            {/* Scrollable translations area */}
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {/* Full Panel Translations */}
+              {translations.length > 0 && (
+                <div className="mb-6">
+                  <h2 className="text-xl font-semibold mb-2">Full Panel Translations</h2>
+                  {translations.map((line, idx) => (
+                    <div key={idx} className="bg-gray-100 p-3 mb-2 rounded">
+                      <p className="text-sm mb-1"><strong>JP:</strong> {line.jp}</p>
+                      <p className="text-sm mb-2"><strong>EN:</strong> {line.en}</p>
+                      <button
+                        className="px-2 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                        onClick={() => addToEditor(line.jp, line.en)}
+                      >
+                        ➕ Add to Editor
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+             
+              {/* Cropped Bubble Translations */}
+              {bubbleTranslations.length > 0 && (
+                <div>
+                  <h2 className="text-xl font-semibold mb-2">Cropped Bubble Translations</h2>
+                  {bubbleTranslations.map((line, idx) => (
+                    <div key={idx} className="bg-yellow-100 p-3 mb-2 rounded">
+                      <p className="text-sm mb-1"><strong>JP:</strong> {line.jp}</p>
+                      <p className="text-sm mb-2"><strong>EN:</strong> {line.en}</p>
+                      <button
+                        className="px-2 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                        onClick={() => addToEditor(line.jp, line.en)}
+                      >
+                        ➕ Add to Editor
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Right Panel: Clean Image Upload & Editor */}
+          <div className="w-1/2 p-4 flex flex-col overflow-hidden">
+                         {/* Fixed top section (header, input, clean image) */}
+             <div className="flex-shrink-0 mb-4">
+               <h2 className="text-xl font-bold mb-4">Clean Panel + Translation Editor</h2>
+               <div className="flex justify-between items-center mb-4">
+                 <input type="file" accept="image/*" onChange={handleCleanUpload} className="p-2 border rounded" />
+                 {cleanImage && (
+                   <button
+                     onClick={downloadEditedPanel}
+                     className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                   >
+                     💾 Download Edited Panel
+                   </button>
+                 )}
+               </div>
+               <div className="relative" ref={canvasRef}>
+                {cleanImage && (
+                  <img
+                    src={cleanImage}
+                    alt="Clean Panel"
+                    className={`w-full max-h-80 object-contain border rounded ${placingIndex !== null ? 'cursor-crosshair' : 'cursor-default'}`}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseLeave}
+                  />
+                )}
+                {/* Drawing rectangle for clean image */}
+                {isDrawing && drawStart && drawEnd && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${Math.min(drawStart.x, drawEnd.x)}px`,
+                      top: `${Math.min(drawStart.y, drawEnd.y)}px`,
+                      width: `${Math.abs(drawStart.x - drawEnd.x)}px`,
+                      height: `${Math.abs(drawStart.y - drawEnd.y)}px`,
+                      border: "2px dashed blue",
+                      backgroundColor: "rgba(0, 0, 255, 0.1)",
+                      pointerEvents: "none",
+                      zIndex: 10
+                    }}
+                  />
+                )}
+                                 {/* Placed Text */}
+                 {placedText.map((t, i) => (
+                   <div
+                     key={i}
+                     style={{
+                       position: "absolute",
+                       top: `${t.y}px`,
+                       left: `${t.x}px`,
+                       width: `${t.width}px`,
+                       height: `${t.height}px`,
+                       color: t.color || "#000000",
+                       fontSize: `${t.fontSize || 14}px`,
+                       fontFamily: t.fontFamily || "Arial",
+                       pointerEvents: "none",
+                       display: "flex",
+                       alignItems: "center",
+                       justifyContent: "center",
+                       textAlign: "center",
+                       wordBreak: "break-word",
+                       overflow: "hidden",
+                       textShadow: t.color === "#ffffff" ? "1px 1px 2px rgba(0,0,0,0.8)" : "1px 1px 2px rgba(255,255,255,0.8)",
+                       padding: "2px",
+                       lineHeight: "1.2",
+                       maxHeight: `${t.height}px`
+                     }}
+                     title={t.en} // Show full text on hover
+                   >
+                     {t.en}
+                   </div>
+                 ))}
+                 {/* Custom Placed Text */}
+                 {customTexts.map((text) => (
+                   text.isPlaced && text.text.trim() !== '' && (
+                     <div
+                       key={text.id}
+                       style={{
+                         position: "absolute",
+                         top: `${text.y}px`,
+                         left: `${text.x}px`,
+                         width: `${text.width}px`,
+                         height: `${text.height}px`,
+                         color: text.color,
+                         fontSize: `${text.fontSize}px`,
+                         fontFamily: text.fontFamily,
+                         pointerEvents: "none",
+                         display: "flex",
+                         alignItems: "center",
+                         justifyContent: "center",
+                         textAlign: "center",
+                         wordBreak: "break-word",
+                         overflow: "hidden",
+                         textShadow: text.color === "#ffffff" ? "1px 1px 2px rgba(0,0,0,0.8)" : "1px 1px 2px rgba(255,255,255,0.8)",
+                         padding: "2px",
+                         lineHeight: "1.2",
+                         maxHeight: `${text.height}px`
+                       }}
+                       title={text.text}
+                     >
+                       {text.text}
+                     </div>
+                   )
+                 ))}
+                 {/* Placement indicator */}
+                 {placingIndex !== null && (
+                   <div className="absolute top-2 left-2 bg-yellow-500 text-black px-3 py-1 rounded text-sm font-bold z-20">
+                     Click and drag to create text area
+                   </div>
+                 )}
+              </div>
+            </div>
+           
+                         {/* Scrollable Translation Controls */}
+             <div className="flex-1 overflow-y-auto min-h-0">
+               {/* Custom Text Section */}
+               <div className="mb-6">
+                 <div className="flex justify-between items-center mb-2">
+                   <h3 className="text-lg font-semibold">Custom Text Boxes</h3>
+                   <button
+                     onClick={addCustomText}
+                     className="bg-purple-600 text-white px-3 py-1 text-sm rounded hover:bg-purple-700"
+                   >
+                     ➕ Add Custom Text
+                   </button>
+                 </div>
+                
+                 {customTexts.length > 0 && (
+                   <div className="space-y-3 mb-4">
+                     {customTexts.map((text) => (
+                       <div key={text.id} className="bg-purple-50 border border-purple-200 p-3 rounded">
+                         <div className="flex justify-between items-start mb-2">
+                           <span className="text-sm text-purple-600 font-medium">Custom Text #{text.id}</span>
+                           <button
+                             onClick={() => removeCustomText(text.id)}
+                             className="ml-2 px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                           >
+                             ✕
+                           </button>
+                         </div>
+                        
+                         <textarea
+                           className="w-full border rounded p-2 text-sm mb-2 resize-y"
+                           rows="2"
+                           value={text.text}
+                           onChange={(e) => updateCustomText(text.id, 'text', e.target.value)}
+                           placeholder="Enter your custom text here..."
+                         />
+                        
+                         <div className="flex items-center space-x-2 flex-wrap">
+                           <button
+                             className={`px-2 py-1 text-sm rounded ${placingIndex === `custom-${text.id}` ? "bg-yellow-500 text-black" : "bg-purple-500 text-white hover:bg-purple-600"}`}
+                             onClick={() => placeCustomText(text.id)}
+                           >
+                             🎯 {placingIndex === `custom-${text.id}` ? "Cancel Placement" : "Draw Text Area"}
+                           </button>
+                          
+                           <select
+                             value={text.fontSize}
+                             onChange={(e) => updateCustomText(text.id, 'fontSize', parseInt(e.target.value))}
+                             className="text-sm border p-1 rounded"
+                           >
+                             {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map(size => (
+                               <option key={size} value={size}>{size}px</option>
+                             ))}
+                           </select>
+                          
+                           <select
+                             value={text.fontFamily}
+                             onChange={(e) => updateCustomText(text.id, 'fontFamily', e.target.value)}
+                             className="text-sm border p-1 rounded"
+                           >
+                             <option value="Arial">Arial</option>
+                             <option value="Comic Sans MS">Comic Sans MS</option>
+                             <option value="Impact">Impact</option>
+                             <option value="Times New Roman">Times New Roman</option>
+                             <option value="Verdana">Verdana</option>
+                           </select>
+                          
+                           <button
+                             className="text-sm border px-2 py-1 rounded hover:bg-gray-100"
+                             onClick={() => updateCustomText(text.id, 'color', text.color === "#000000" ? "#ffffff" : "#000000")}
+                           >
+                             {text.color === "#000000" ? "⚫ Black" : "⚪ White"}
+                           </button>
+                          
+                           {text.isPlaced && (
+                             <button
+                               className="text-sm text-red-500 underline hover:text-red-700"
+                               onClick={() => removeCustomTextPlacement(text.id)}
+                             >
+                               Remove Placement
+                             </button>
+                           )}
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 )}
+               </div>
+              
+               {editedTranslations.length > 0 && (
+                 <div>
+                   <div className="flex justify-between items-center mb-2">
+                     <h3 className="text-lg font-semibold">Your Edited Translations</h3>
+                     <button onClick={clearEditor} className="bg-red-600 text-white px-3 py-1 text-sm rounded hover:bg-red-700">Clear All</button>
+                   </div>
+                 
+                  <ul className="space-y-3">
+                    {editedTranslations.map((line, idx) => (
+                      <li key={idx} className="bg-white border p-3 rounded shadow">
+                        <div className="flex justify-between items-start mb-2">
+                          <p className="text-sm text-gray-500"><strong>JP:</strong> {line.jp}</p>
+                          <button
+                            onClick={() => removeFromEditor(idx)}
+                            className="ml-2 px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <textarea
+                          className="w-full border rounded p-2 text-sm mb-2 resize-y"
+                          rows="2"
+                          value={line.en}
+                          onChange={(e) => updateEditedTranslation(idx, e.target.value)}
+                          placeholder="Edit your translation here..."
+                        />
+                        <div className="flex items-center space-x-2 flex-wrap">
+                          <button
+                            className={`px-2 py-1 text-sm rounded ${placingIndex === idx ? "bg-yellow-500 text-black" : "bg-blue-500 text-white hover:bg-blue-600"}`}
+                            onClick={() => {
+                              const newPlacingIndex = placingIndex === idx ? null : idx;
+                              console.log('Setting placingIndex for translation:', { idx, newPlacingIndex, currentPlacingIndex: placingIndex });
+                              setPlacingIndex(newPlacingIndex);
+                            }}
+                          >
+                            🎯 {placingIndex === idx ? "Cancel Placement" : "Draw Text Area"}
+                          </button>
+                          <select
+                            value={line.fontSize || 14}
+                            onChange={(e) => updateFontSize(idx, e.target.value)}
+                            className="text-sm border p-1 rounded"
+                          >
+                            {[6, 8, 10, 12, 14, 16, 18, 20, 22, 24].map(size => (
+                              <option key={size} value={size}>{size}px</option>
+                            ))}
+                          </select>
+                          <select
+                            value={line.fontFamily || "Arial"}
+                            onChange={(e) => updateFontFamily(idx, e.target.value)}
+                            className="text-sm border p-1 rounded"
+                          >
+                            <option value="Arial">Arial</option>
+                            <option value="Comic Sans MS">Comic Sans MS</option>
+                            <option value="Impact">Impact</option>
+                            <option value="Times New Roman">Times New Roman</option>
+                            <option value="Verdana">Verdana</option>
+                          </select>
+                          <button
+                            className="text-sm border px-2 py-1 rounded hover:bg-gray-100"
+                            onClick={() => toggleFontColor(idx)}
+                          >
+                            {line.color === "#000000" ? "⚫ Black" : "⚪ White"}
+                          </button>
+                          {placedText.some(p => p.index === idx) && (
+                            <button
+                              className="text-sm text-red-500 underline hover:text-red-700"
+                              onClick={() => removePlaced(idx)}
+                            >
+                              Remove Placement
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    function Home({ setCurrentPage }) {
+      return (
+        <div className="relative h-full bg-gradient-to-br from-black to-red-900 text-white overflow-hidden">
+          <div className="absolute inset-0 opacity-50" style={{background: 'linear-gradient(to bottom, #000, #b91c1c)'}}></div>
+          <div className="relative z-10 flex flex-col items-center justify-center h-full p-8 text-center">
+            <h1 className="text-8xl font-bold font-impact mb-4 tracking-wider text-red-500 drop-shadow-[0_0_10px_rgba(255,0,0,0.8)]">
+              TsengScans
+            </h1>
+            <p className="text-2xl font-semibold mb-12 max-w-2xl">
+              Reclaim Your Manga: Translate Raw, Fight Agenda-Pushers, Revive the Niche. Perfect for Solo Fan-Translators and Teams.
+            </p>
+            <div className="space-y-6 max-w-3xl">
+              <div className="bg-black bg-opacity-70 p-4 rounded-lg shadow-lg">
+                <p className="text-xl"><span className="text-red-500 font-bold">Empower Fans to Easily Translate Manga:</span> Easy-to-use UI, fast and accurate.</p>
+              </div>
+              <div className="bg-black bg-opacity-70 p-4 rounded-lg shadow-lg">
+                <p className="text-xl"><span className="text-red-500 font-bold">Battle Agenda-Pushing Localizers:</span> Say goodbye to agenda-pushing edits that ruin classics. Keep it pure, keep it real.</p>
+              </div>
+              <div className="bg-black bg-opacity-70 p-4 rounded-lg shadow-lg">
+                <p className="text-xl"><span className="text-red-500 font-bold">Unlock Niche Series for True Believers:</span> Lesser-known gems deserve a chance. Bring forgotten works of art to life for the dedicated fans.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setCurrentPage('translate')}
+              className="mt-12 px-8 py-4 bg-red-600 text-white text-xl font-bold rounded hover:bg-red-700 transition"
+            >
+              Start Translating Now
+            </button>
+          </div>
+        </div>
+      );
+    }
+    // About Page
+    function About() {
+      return (
+        <div className="relative bg-gradient-to-br from-black to-red-900 text-white p-8">
+          <div className="absolute inset-0 opacity-50" style={{background: 'linear-gradient(to bottom, #000, #b91c1c)'}}></div>
+          <div className="relative z-10 max-w-4xl mx-auto">
+            <h1 className="text-6xl font-bold font-impact mb-8 tracking-wider text-red-500 drop-shadow-[0_0_10px_rgba(255,0,0,0.8)] text-center">
+              About TsengScans
+            </h1>
+           
+            {/* Section 1: The Problem - Poor Localizers and Neglected Manga */}
+            <section className="mb-12">
+              <h2 className="text-4xl font-bold text-red-400 mb-6">The Localization Problem Destroying Manga and Anime</h2>
+              <p className="text-xl mb-4">
+                Let's face it: the manga and anime world we grew up loving is under siege. A horde of agenda-pushing localizers have wormed their way into translation teams at big publishers. They "localize" by injecting unneccesary slang and politics, toning down "problematic" content, and turning strong, unapologetic Japanese storytelling into watered-down, virtue-signaling. It's direct disrespect to the original artists who crafted these works.
+                <img src="./src/assets/images/poor-localization.webp" alt="Localization Problem" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+              </p>
+              <p className="text-xl mb-4">
+                Remember when characters spoke like real people instead of politically-correct robots? Or when fanservice wasn't censored because of a vocal minority? These localizers openly brag about "improving" the source material, admitting they hate the culture they're supposed to honor. Enough is enough—it's time for fans to fight back and reclaim our stories.
+                <img src="./src/assets/images/localizers-rant.jpg" alt="Localizer Tweet" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+              </p>
+              <p className="text-xl mb-4">
+                And while these butchered works are everywhere, countless niche and underrated manga remain undiscovered. Publishers chase safe bets, ignoring raw, edgy series that don't appeal to everyone. Hidden gems with deep lore, brutal action, or unfiltered drama get swept under the rug, leaving true enthusiasts starving for content.
+                <img src="./src/assets/images/niche-series.png" alt="Underrated Manga" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+              </p>
+            </section>
+           
+            {/* Section 2: The Solution - Your Tool */}
+            <section className="mb-12">
+              <h2 className="text-4xl font-bold text-red-400 mb-6">TsengScans: Putting translation back in the hands of the fans</h2>
+              <p className="text-xl mb-4">
+                TsengScans is built for true fans like you who are done waiting. This AI-powered translator lets you take raw manga panels, obtain accurate translations, and clean them up, providing faithful, uncensored English text. No agendas, just faithful translations that respect the source. Revive those niche series gathering dust, fix ruined classics, and share them with everyone.
+              </p>
+            </section>
+           
+            {/* Section 3: Tutorial */}
+            <section>
+              <h2 className="text-4xl font-bold text-red-400 mb-6">Quick Tutorial: How to Use TsengScans</h2>
+              <ol className="space-y-6 text-xl list-decimal pl-6">
+                <li>
+                  <strong>Upload Your Raw Panel:</strong> Grab a scan from your favorite raw source. Hit the "Raw Manga Panel" upload. The AI detects Japanese text and spits out initial translations. Use the crop tool for tricky speech bubbles.
+                  {/* Placeholder for image: <img src="placeholder-raw-upload.png" alt="Raw upload step" className="mt-2 rounded shadow" /> */}
+                  <img src="./src/assets/images/raw-upload.png" alt="Raw upload step" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+                </li>
+                <li>
+                  <strong>Upload the Clean Version:</strong> Get a textless panel (or use tools (photoshop, canva, etc.) to remove Japanese text). This is your canvas for English overlays.
+                  {/* Placeholder for image: <img src="placeholder-clean-upload.png" alt="Clean upload step" className="mt-2 rounded shadow" /> */}
+                  <img src="./src/assets/images/clean-upload.png" alt="Clean upload step" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+                </li>
+                <li>
+                  <strong>Edit and Place Translations:</strong> Tweak the AI suggestions to keep them authentic, but clean. Drag to place text boxes on the clean image, adjust fonts, sizes, and colors for that perfect fit.
+                  {/* Placeholder for image: <img src="placeholder-edit-place.png" alt="Editing step" className="mt-2 rounded shadow" /> */}
+                  <img src="./src/assets/images/edit-place.png" alt="Editing step" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+                </li>
+                <li>
+                  <strong>Download and Share:</strong> Export your translated panel (Download or Screenshot). Build full chapters, revive dead series, and share them with the world.
+                  {/* Placeholder for image: <img src="placeholder-download.png" alt="Download step" className="mt-2 rounded shadow" /> */}
+                  <img src="./src/assets/images/download.png" alt="Download step" className="mt-2 rounded shadow w-full max-w-md mx-auto" />
+                </li>
+              </ol>
+              <p className="text-lg mt-6 italic">Pro Tip: For best results, use high-res scans and experiment with custom text for SFX or notes.</p>
+            </section>
+          </div>
+        </div>
+      );
+    }
+    function App() {
+      const [currentPage, setCurrentPage] = useState('home');
+      return (
+        <div className="flex flex-col h-screen">
+          <nav className="bg-blue-600 text-white p-4 flex space-x-4">
+            <button onClick={() => setCurrentPage('home')} className="hover:underline">Home</button>
+            <button onClick={() => setCurrentPage('about')} className="hover:underline">About</button>
+            <button onClick={() => setCurrentPage('pricing')} className="hover:underline">Pricing</button>
+            <button onClick={() => setCurrentPage('contact')} className="hover:underline">Contact</button>
+            <button onClick={() => setCurrentPage('translate')} className="hover:underline">Translate</button>
+          </nav>
+          <div className="flex-1 overflow-auto">
+            {currentPage === 'home' && <Home setCurrentPage={setCurrentPage} />}
+            {currentPage === 'about' && <About />}
+            {currentPage === 'pricing' && <div className="p-4"><h1 className="text-2xl font-bold">Pricing</h1><p>Currently free to use.</p></div>}
+            {currentPage === 'contact' && <div className="p-4"><h1 className="text-2xl font-bold">Contact</h1><p>Contact us at support@mangatranslator.com</p></div>}
+            {currentPage === 'translate' && <MangaTranslatorUI />}
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
